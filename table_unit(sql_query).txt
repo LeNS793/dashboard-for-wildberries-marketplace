@@ -1,0 +1,56 @@
+--в данных из API WB по одному заказу может содержаться несколько строк. Необходимо агрегировать данные по ним, чтобы данные были понятны
+WITH date_grouped AS (SELECT *, 
+                             MAX(sale_dt) OVER (PARTITION BY srid) AS sale_dt_max
+                      FROM marketing_realizationreport),
+     clear_orders AS (SELECT srid,
+                             rid,
+                             nm_id,
+                             sa_name,
+                             SUM(quantity) AS quantity,
+                             SUM(retail_price) AS retail_price,
+                             SUM(retail_amount) AS retail_amount,
+                             SUM(sale_percent) AS sale_percent,
+                             SUM(commission_percent) AS commission_percent,
+                             office_name,
+                             sale_dt_max AS sale_dt,
+                             SUM(retail_price_withdisc_rub) AS retail_price_withdisc_rub,
+                             SUM(delivery_rub) AS delivery_rub,
+                             SUM(product_discount_for_report) AS product_discount_for_report,
+                             SUM(ppvz_spp_prc) AS ppvz_spp_prc,
+                             SUM(ppvz_for_pay) AS ppvz_for_pay,
+                             SUM(acquiring_fee) AS acquiring_fee,
+                             SUM(ppvz_vw) AS ppvz_vw,
+                             SUM(ppvz_vw_nds) AS ppvz_vw_nds,
+                             SUM(penalty) AS penalty
+                      FROM date_grouped
+                      GROUP BY srid, rid, nm_id, sa_name, office_name, sale_dt_max)
+
+SELECT co.srid,
+       co.rid,
+       DATE_TRUNC('day', CAST(co.sale_dt AS timestamp)) AS sale_dt,      					--дата продажи
+       co.nm_id,                                                         					--артикул ВБ
+       co.sa_name,                                                       					--артикул продавца
+       mp.name,                                                          					--название товара
+       co.retail_price,                                                  					--цена розничная
+       co.sale_percent,                                                  					--согласованная скидка продавца
+       co.retail_price_withdisc_rub,                                     					--цена розничная с учетом согласованной скидки
+       co.ppvz_spp_prc,                                                  					--скидка постоянного покупателя
+       co.retail_price_withdisc_rub * (1-co.ppvz_spp_prc) AS price_including_regular_customer_discount,         --цена с учетом скидки постоянного покупателя
+       co.retail_amount,                                                 				        --сумма, оплаченная покупателем за товар с учетом промо и акций МП
+       mp.min_recommended_price,    					                                        --минимальная рекомендуемая цена продажи
+       (CASE
+            WHEN co.retail_amount > mp.min_recommended_price THEN 'Прибыльная продажа'
+            ELSE 'Убыточная продажа'
+       END) AS sell_type,                                                					--тип продажи (прибыль/убыток)
+       mp.cost,                                                          					--себестоимость
+       (co.ppvz_vw + co.ppvz_vw_nds + co.acquiring_fee) AS wb_tax,          					--комиссия МП с НДС + эквайринг
+       co.delivery_rub,                                                  					--стоимость логистики
+       co.penalty,                                                       					--штрафы
+       (co.ppvz_for_pay - mp.cost - co.delivery_rub - co.penalty) AS interim_profit, 				--промежуточная прибыль с учетом затрат
+       co.quantity,                                                      					--количество 
+       (CASE
+            WHEN co.office_name = 'Склад продавца - везу на склад WB' THEN 'FBS'
+            ELSE 'FBO'
+       END) AS warehouse_type                                           					--тип доставки
+FROM clear_orders AS co
+LEFT OUTER JOIN marketing_product AS mp ON co.sa_name = mp.article

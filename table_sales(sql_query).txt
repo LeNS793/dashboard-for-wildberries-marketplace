@@ -1,0 +1,30 @@
+WITH revenue AS (SELECT mr.srid,
+                        DATE_TRUNC('day', CAST(mr.sale_dt AS timestamp)) AS sale_dt,      	--дата продажи
+                        mtlc.name AS toplevelcategory,                                    	--категория высокого уровня
+                        mmlc.name AS middlelevelcategory,                                 	--категория среднего уровня
+                        mpc.name AS lowlevelcategory,                                     	--категория низкого уровня
+                        mr.nm_id,                                                         	--артикул ВБ
+                        mr.sa_name,                                                       	--артикул продавца
+                        mp.name,                                                          	--название товара
+                        mr.quantity,                                                      	--количество
+                        mld.volume_l,                                                     	--объем единицы товара, л
+                        mr.office_name,                                                     	--тип операции
+                        (CASE
+                             WHEN mr.office_name = 'Склад продавца - везу на склад WB' THEN 'FBS'
+                             ELSE 'FBO'
+                         END) AS warehouse_type,                                           	--тип доставки
+                         CAST(mr.retail_amount AS int) AS retail_amount,                        --выручка
+                         mr.supplier_oper_name,
+                         ROW_NUMBER() OVER(PARTITION BY mr.srid ORDER BY mr.supplier_oper_name) --нумерация для удаления операций непродаж
+                 FROM marketing_realizationreport AS mr
+                 LEFT OUTER JOIN marketing_product AS mp ON mr.sa_name = mp.article
+                 LEFT OUTER JOIN marketing_productcategory AS mpc ON mp.category_id = mpc.id
+                 LEFT OUTER JOIN marketing_middlelevelcategory AS mmlc ON mpc.parent_id = mmlc.id
+                 LEFT OUTER JOIN marketing_toplevelcategory AS mtlc ON mmlc.parent_id = mtlc.id
+                 LEFT OUTER JOIN marketing_logisticsdata AS mld ON mp.article = mld.article)
+--исключаем все, что не являлось продажами или компенсациями
+SELECT *
+FROM revenue
+WHERE supplier_oper_name = 'Продажа' AND row_number <=2
+   OR supplier_oper_name = 'Авансовая оплата за товар без движения'
+   OR supplier_oper_name = 'Частичная компенсация брака'
